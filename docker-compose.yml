@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: yelp_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./queries:/queries
+      - ./data:/data
+    networks:
+      - yelp_network
+
+  mongodb:
+    image: mongo:latest
+    container_name: yelp_mongodb
+    restart: always
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=mongodb
+      - MONGO_INITDB_ROOT_PASSWORD=mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./data:/data
+    networks:
+      - yelp_network
+
+  python:
+    build: .
+    container_name: yelp_python
+    depends_on:
+      - postgres
+      - mongodb
+    volumes:
+      - ./code:/app/code
+      - ./queries:/app/queries
+      - ./data:/app/data
+    networks:
+      - yelp_network
+    command: tail -f /dev/null
+
+networks:
+  yelp_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mongodb_data:
