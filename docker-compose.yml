@@ -30,6 +30,7 @@ services:
     volumes:
       - mongodb_data:/data/db
       - ./data:/data
+    command: --wiredTigerCacheSizeGB 4 --setParameter maxTransactionLockRequestTimeoutMillis=10000
     networks:
       - yelp_network
 

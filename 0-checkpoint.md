@@ -39,7 +39,8 @@ CREATE TABLE businesses (
     categories TEXT,
     hours JSONB
 );
-
+```
+```sql
 CREATE TABLE users (
     user_id VARCHAR(22) PRIMARY KEY,
     name VARCHAR(255),
@@ -64,7 +65,8 @@ CREATE TABLE users (
     compliment_writer INTEGER,
     compliment_photos INTEGER
 );
-
+```
+```sql
 CREATE TABLE reviews (
     review_id VARCHAR(22) PRIMARY KEY,
     user_id VARCHAR(22) REFERENCES users(user_id),
@@ -76,7 +78,9 @@ CREATE TABLE reviews (
     funny INTEGER,
     cool INTEGER
 );
+```
 
+```sql
 CREATE TABLE tips (
     tip_id SERIAL PRIMARY KEY,
     user_id VARCHAR(22) REFERENCES users(user_id),
@@ -85,7 +89,8 @@ CREATE TABLE tips (
     date TIMESTAMP,
     compliment_count INTEGER
 );
-
+```
+```sql
 CREATE TABLE checkins (
     checkin_id SERIAL PRIMARY KEY,
     business_id VARCHAR(22) REFERENCES businesses(business_id),
