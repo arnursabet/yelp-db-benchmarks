@@ -1,20 +1,29 @@
 import psycopg2
 from pymongo import MongoClient
-import time
 import argparse
-import statistics
 import os
 import sys
-import resource
-import pandas as pd
-import matplotlib.pyplot as plt
 from tabulate import tabulate
+import json
+import bson
+from bson import json_util
+import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db_config import PG_PARAMS, get_mongo_uri, DEFAULT_DB_NAME
 
 from queries.benchmark_queries import QUERIES, list_queries as list_available_queries
+
+class MongoEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, bson.regex.Regex):
+            return {"$regex": obj.pattern, "$options": obj.flags}
+        try:
+            return json_util.default(obj)
+        except TypeError:
+            return str(obj)
+        return json.JSONEncoder.default(self, obj)
 
 def init_connections():
     """Initialize connections to both databases"""
@@ -30,68 +39,21 @@ def close_connections(pg_conn, mongo_client):
     if mongo_client:
         mongo_client.close()
 
-def get_memory_usage():
-    """Get current memory usage in MB"""
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
-
-def run_postgres_query(conn, query, params=None, iterations=3):
-    """Run a PostgreSQL query and measure execution time"""
+def run_postgres_explain(conn, query, params=None):
+    """Run a PostgreSQL query with EXPLAIN ANALYZE and get JSON output"""
     cursor = conn.cursor()
-    times = []
-    rows = None
+    explain_query = f"EXPLAIN (ANALYZE, FORMAT JSON) {query}"
     
-    # Warm-up run
-    cursor.execute(query, params or [])
-    rows = cursor.fetchall()
+    cursor.execute(explain_query, params or [])
+    explain_results = cursor.fetchall()
     
-    # Timed runs
-    for i in range(iterations):
-        start_mem = get_memory_usage()
-        start_time = time.time()
-        
-        cursor.execute(query, params or [])
-        rows = cursor.fetchall()
-        
-        end_time = time.time()
-        end_mem = get_memory_usage()
-        
-        times.append(end_time - start_time)
-        
+    json_result = explain_results[0][0]
+    
     cursor.close()
-    return {
-        'times': times,
-        'row_count': len(rows) if rows else 0,
-        'memory_delta': end_mem - start_mem
-    }
+    return json_result
 
-def run_mongo_query(db, query_func, iterations=3):
-    """Run a MongoDB query and measure execution time"""
-    times = []
-    result = None
-    
-    # Warm-up run
-    result = query_func(db)
-    
-    # Timed runs
-    for i in range(iterations):
-        start_mem = get_memory_usage()
-        start_time = time.time()
-        
-        result = query_func(db)
-        
-        end_time = time.time()
-        end_mem = get_memory_usage()
-        
-        times.append(end_time - start_time)
-        
-    return {
-        'times': times,
-        'row_count': len(result) if result else 0,
-        'memory_delta': end_mem - start_mem
-    }
-
-def run_benchmark(query_name, pg_conn, mongo_db, iterations=3):
-    """Run benchmark for a specific query on both databases"""
+def run_benchmark(query_name, pg_conn, mongo_db):
+    """Run benchmark for a specific query on both databases using EXPLAIN ANALYZE"""
     if query_name not in QUERIES:
         print(f"Query '{query_name}' not found in predefined queries")
         return None
@@ -99,133 +61,235 @@ def run_benchmark(query_name, pg_conn, mongo_db, iterations=3):
     query_info = QUERIES[query_name]
     print(f"\nRunning benchmark: {query_info['description']}")
     
-    print("  Running PostgreSQL query...")
-    pg_result = run_postgres_query(
+    print("  Running PostgreSQL EXPLAIN ANALYZE...")
+    pg_explain = run_postgres_explain(
         pg_conn, 
         query_info['pg'], 
-        query_info.get('pg_params', []), 
-        iterations
+        query_info.get('pg_params', [])
     )
     
-    print("  Running MongoDB query...")
-    mongo_result = run_mongo_query(
-        mongo_db, 
-        query_info['mongo'], 
-        iterations
-    )
+    print("  Running MongoDB explain()...")
+    
+    if 'mongo_explain' in query_info:
+        mongo_explain = query_info['mongo_explain'](mongo_db)
+    else:
+        print(f"  Warning: No mongo_explain function for query '{query_name}'")
+        mongo_explain = {"error": "No explain function defined for this query"}
     
     return {
         'query_name': query_name,
         'description': query_info['description'],
-        'postgresql': {
-            'avg_time': statistics.mean(pg_result['times']),
-            'min_time': min(pg_result['times']),
-            'max_time': max(pg_result['times']),
-            'row_count': pg_result['row_count'],
-            'memory_delta': pg_result['memory_delta']
-        },
-        'mongodb': {
-            'avg_time': statistics.mean(mongo_result['times']),
-            'min_time': min(mongo_result['times']),
-            'max_time': max(mongo_result['times']),
-            'row_count': mongo_result['row_count'],
-            'memory_delta': mongo_result['memory_delta']
-        }
+        'postgresql': pg_explain,
+        'mongodb': mongo_explain
     }
 
-def print_results(results):
-    """Print benchmark results in a tabular format"""
+def get_timestamp_str():
+    """Get a timestamp string for filenames"""
+    now = datetime.datetime.now()
+    return now.strftime("%Y%m%d_%H%M%S")
+
+def save_results_to_json(results, pg_file="postgres_explain_results.json", mongo_file="mongo_explain_results.json"):
+    """Save benchmark results to separate JSON files for PostgreSQL and MongoDB with timestamps"""
+    pg_results = {}
+    mongo_results = {}
+    
+    results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
+    if not os.path.exists(results_dir):
+        os.makedirs(results_dir)
+    
+    timestamp = get_timestamp_str()
+    
+    pg_filename = f"{os.path.splitext(pg_file)[0]}_{timestamp}.json"
+    mongo_filename = f"{os.path.splitext(mongo_file)[0]}_{timestamp}.json"
+    
+    pg_path = os.path.join(results_dir, pg_filename)
+    mongo_path = os.path.join(results_dir, mongo_filename)
+    
+    for result in results:
+        pg_results[result['query_name']] = {
+            'description': result['description'],
+            'explain_result': result['postgresql']
+        }
+        
+        mongo_results[result['query_name']] = {
+            'description': result['description'],
+            'explain_result': result['mongodb']
+        }
+    
+    with open(pg_path, 'w') as f:
+        json.dump(pg_results, f, indent=2)
+    print(f"\nPostgreSQL EXPLAIN results saved to {pg_path}")
+    
+    with open(mongo_path, 'w') as f:
+        json.dump(mongo_results, f, indent=2, cls=MongoEncoder)
+    print(f"MongoDB explain results saved to {mongo_path}")
+    
+    latest_pg_path = os.path.join(results_dir, "latest_" + os.path.basename(pg_file))
+    latest_mongo_path = os.path.join(results_dir, "latest_" + os.path.basename(mongo_file))
+    
+    with open(latest_pg_path, 'w') as f:
+        json.dump(pg_results, f, indent=2)
+    
+    with open(latest_mongo_path, 'w') as f:
+        json.dump(mongo_results, f, indent=2, cls=MongoEncoder)
+    print(f"Latest results also saved to {latest_pg_path} and {latest_mongo_path}")
+    
+    return results_dir, timestamp
+
+def print_results_summary(results):
+    """Print a simple summary of benchmark results"""
     table_data = []
     
     for result in results:
         pg_data = result['postgresql']
-        mongo_data = result['mongodb']
+        pg_execution_time = "N/A"
+        pg_rows_returned = "N/A"
         
-        if mongo_data['avg_time'] > 0 and pg_data['avg_time'] > 0:
-            if mongo_data['avg_time'] > pg_data['avg_time']:
-                comparison = f"PostgreSQL {mongo_data['avg_time']/pg_data['avg_time']:.2f}x faster"
-            else:
-                comparison = f"MongoDB {pg_data['avg_time']/mongo_data['avg_time']:.2f}x faster"
-        else:
-            comparison = "N/A"
+        try:
+            if isinstance(pg_data, list) and len(pg_data) > 0:
+                if 'Execution Time' in pg_data[0]:
+                    pg_execution_time = f"{pg_data[0]['Execution Time']:.2f}ms"
+                
+                if 'Plan' in pg_data[0]:
+                    plan = pg_data[0]['Plan']
+                    if 'Actual Rows' in plan:
+                        pg_rows_returned = plan['Actual Rows']
+        except (KeyError, TypeError, IndexError):
+            pass
+        
+        mongo_data = result['mongodb']
+        mongo_execution_time = "N/A"
+        mongo_rows_returned = "N/A"
+        mongo_docs_examined = "N/A"
+        
+        try:
+            if 'executionStats' in mongo_data:
+                stats = mongo_data['executionStats']
+                if 'executionTimeMillis' in stats:
+                    mongo_execution_time = f"{stats['executionTimeMillis']}ms"
+                if 'nReturned' in stats:
+                    mongo_rows_returned = stats['nReturned']
+                if 'totalDocsExamined' in stats:
+                    mongo_docs_examined = stats['totalDocsExamined']
+            
+            elif 'ok' in mongo_data and mongo_data.get('ok') == 1:
+                if 'stages' in mongo_data:
+                    final_stage = mongo_data['stages'][-1]
+                    if 'nReturned' in final_stage:
+                        mongo_rows_returned = final_stage['nReturned']
+                
+                if 'executionStats' in mongo_data:
+                    stats = mongo_data['executionStats']
+                    if 'executionTimeMillis' in stats:
+                        mongo_execution_time = f"{stats['executionTimeMillis']}ms"
+                    if 'nReturned' in stats:
+                        mongo_rows_returned = stats['nReturned']
+                    if 'totalDocsExamined' in stats:
+                        mongo_docs_examined = stats['totalDocsExamined']
+                
+                if 'explainVersion' in mongo_data:
+                    if 'stages' in mongo_data:
+                        for stage in mongo_data['stages']:
+                            if '$cursor' in stage and 'executionStats' in stage['$cursor']:
+                                stats = stage['$cursor']['executionStats']
+                                if 'executionTimeMillis' in stats:
+                                    mongo_execution_time = f"{stats['executionTimeMillis']}ms"
+                                if 'nReturned' in stats:
+                                    mongo_rows_returned = stats['nReturned']
+                                if 'totalDocsExamined' in stats:
+                                    mongo_docs_examined = stats['totalDocsExamined']
+                                break
+                        if len(mongo_data['stages']) > 0:
+                            final_stage = mongo_data['stages'][-1]
+                            if 'nReturned' in final_stage:
+                                mongo_rows_returned = final_stage['nReturned']
+        except (KeyError, TypeError):
+            pass
         
         table_data.append([
             result['query_name'],
-            f"{pg_data['avg_time']*1000:.2f}ms",
-            f"{mongo_data['avg_time']*1000:.2f}ms",
-            comparison,
-            pg_data['row_count'],
-            mongo_data['row_count'],
-            f"{pg_data['memory_delta']:.2f}MB",
-            f"{mongo_data['memory_delta']:.2f}MB"
+            pg_execution_time,
+            str(pg_rows_returned),
+            mongo_execution_time,
+            str(mongo_rows_returned),
+            str(mongo_docs_examined)
         ])
     
-    headers = ["Query", "PG Avg Time", "Mongo Avg Time", "Comparison", 
-               "PG Rows", "Mongo Rows", "PG Mem Δ", "Mongo Mem Δ"]
+    headers = ["Query", "PG Execution Time", "PG Rows", "Mongo Execution Time", "Mongo Rows", "Mongo Docs Examined"]
     
-    print("\n=== Benchmark Results ===")
+    print("\n=== Benchmark Results Summary ===")
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
-
-def save_results_to_csv(results, filename="benchmark_results.csv"):
-    """Save benchmark results to a CSV file"""
-    data = []
     
     for result in results:
+        query_name = result['query_name']
         pg_data = result['postgresql']
         mongo_data = result['mongodb']
         
-        data.append({
-            'Query': result['query_name'],
-            'Description': result['description'],
-            'PG Avg Time (ms)': pg_data['avg_time'] * 1000,
-            'PG Min Time (ms)': pg_data['min_time'] * 1000,
-            'PG Max Time (ms)': pg_data['max_time'] * 1000,
-            'PG Rows': pg_data['row_count'],
-            'PG Memory Delta (MB)': pg_data['memory_delta'],
-            'Mongo Avg Time (ms)': mongo_data['avg_time'] * 1000,
-            'Mongo Min Time (ms)': mongo_data['min_time'] * 1000,
-            'Mongo Max Time (ms)': mongo_data['max_time'] * 1000,
-            'Mongo Rows': mongo_data['row_count'],
-            'Mongo Memory Delta (MB)': mongo_data['memory_delta']
-        })
-    
-    df = pd.DataFrame(data)
-    df.to_csv(filename, index=False)
-    print(f"\nResults saved to {filename}")
-
-def generate_charts(results, output_dir="benchmark_charts"):
-    """Generate charts comparing PostgreSQL and MongoDB performance"""
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    query_names = [r['query_name'] for r in results]
-    pg_times = [r['postgresql']['avg_time'] * 1000 for r in results]
-    mongo_times = [r['mongodb']['avg_time'] * 1000 for r in results]
-    
-    plt.figure(figsize=(12, 6))
-    bar_width = 0.35
-    x = range(len(query_names))
-    
-    plt.bar([i - bar_width/2 for i in x], pg_times, bar_width, label='PostgreSQL')
-    plt.bar([i + bar_width/2 for i in x], mongo_times, bar_width, label='MongoDB')
-    
-    plt.xlabel('Query')
-    plt.ylabel('Average Execution Time (ms)')
-    plt.title('Database Performance Comparison')
-    plt.xticks(x, query_names, rotation=45, ha='right')
-    plt.legend()
-    plt.tight_layout()
-    
-    plt.savefig(os.path.join(output_dir, 'execution_times.png'))
-    print(f"Chart saved to {os.path.join(output_dir, 'execution_times.png')}")
+        pg_rows = "N/A"
+        pg_examined = "N/A"
+        try:
+            if isinstance(pg_data, list) and len(pg_data) > 0:
+                if 'Plan' in pg_data[0]:
+                    plan = pg_data[0]['Plan']
+                    if 'Actual Rows' in plan:
+                        pg_rows = plan['Actual Rows']
+                    if 'Plans' in plan:
+                        rows_examined = 0
+                        scan_nodes = []
+                        
+                        def collect_scan_nodes(node):
+                            if 'Node Type' in node and ('Scan' in node['Node Type'] or 'Seq Scan' in node['Node Type']):
+                                scan_nodes.append(node)
+                            if 'Plans' in node:
+                                for child in node['Plans']:
+                                    collect_scan_nodes(child)
+                        
+                        collect_scan_nodes(plan)
+                        
+                        for node in scan_nodes:
+                            if 'Actual Rows' in node:
+                                rows_examined += node['Actual Rows']
+                        
+                        if rows_examined > 0:
+                            pg_examined = rows_examined
+        except (KeyError, TypeError, IndexError):
+            pass
+        
+        mongo_rows = "N/A"
+        mongo_examined = "N/A"
+        try:
+            if 'stages' in mongo_data:
+                final_stage = mongo_data['stages'][-1]
+                if 'nReturned' in final_stage:
+                    mongo_rows = final_stage['nReturned']
+                
+                for stage in mongo_data['stages']:
+                    if '$cursor' in stage and 'executionStats' in stage['$cursor']:
+                        stats = stage['$cursor']['executionStats']
+                        if 'totalDocsExamined' in stats:
+                            mongo_examined = stats['totalDocsExamined']
+                        break
+            elif 'executionStats' in mongo_data:
+                stats = mongo_data['executionStats']
+                if 'nReturned' in stats:
+                    mongo_rows = stats['nReturned']
+                if 'totalDocsExamined' in stats:
+                    mongo_examined = stats['totalDocsExamined']
+        except (KeyError, TypeError, IndexError):
+            pass
+            
+        print(f"\nResults for {query_name}:")
+        print(f"  PostgreSQL: {pg_rows} rows returned, {pg_examined} rows examined")
+        print(f"  MongoDB: {mongo_rows} documents returned, {mongo_examined} documents examined")
 
 def main():
-    parser = argparse.ArgumentParser(description='Benchmark PostgreSQL vs MongoDB for Yelp dataset')
+    parser = argparse.ArgumentParser(description='Benchmark PostgreSQL vs MongoDB for Yelp dataset using EXPLAIN ANALYZE')
     parser.add_argument('--queries', nargs='+', help='Specific queries to run (default: all)')
     parser.add_argument('--list', action='store_true', help='List available queries')
-    parser.add_argument('--iterations', type=int, default=3, help='Number of iterations for each query (default: 3)')
-    parser.add_argument('--csv', type=str, help='Save results to CSV file')
-    parser.add_argument('--charts', action='store_true', help='Generate charts comparing performance')
+    parser.add_argument('--pg-output', type=str, default='postgres_explain_results.json', help='Output file for PostgreSQL EXPLAIN results')
+    parser.add_argument('--mongo-output', type=str, default='mongo_explain_results.json', help='Output file for MongoDB explain results')
+    parser.add_argument('--results-dir', type=str, default=None, help='Directory to save results (default: ./results)')
+    parser.add_argument('--no-timestamp', action='store_true', help='Disable timestamps in filenames')
     
     args = parser.parse_args()
     
@@ -241,20 +305,47 @@ def main():
         results = []
         for query_name in query_names:
             if query_name in QUERIES:
-                result = run_benchmark(query_name, pg_conn, mongo_db, args.iterations)
+                result = run_benchmark(query_name, pg_conn, mongo_db)
                 if result:
                     results.append(result)
             else:
                 print(f"Warning: Query '{query_name}' not found, skipping")
         
         if results:
-            print_results(results)
+            print_results_summary(results)
             
-            if args.csv:
-                save_results_to_csv(results, args.csv)
+            results_dir = args.results_dir
+            if results_dir is None:
+                results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
             
-            if args.charts:
-                generate_charts(results)
+            if not os.path.exists(results_dir):
+                os.makedirs(results_dir)
+            
+            if args.no_timestamp:
+                pg_path = os.path.join(results_dir, args.pg_output)
+                mongo_path = os.path.join(results_dir, args.mongo_output)
+                
+                pg_results = {}
+                mongo_results = {}
+                for result in results:
+                    pg_results[result['query_name']] = {
+                        'description': result['description'],
+                        'explain_result': result['postgresql']
+                    }
+                    mongo_results[result['query_name']] = {
+                        'description': result['description'],
+                        'explain_result': result['mongodb']
+                    }
+                
+                with open(pg_path, 'w') as f:
+                    json.dump(pg_results, f, indent=2)
+                
+                with open(mongo_path, 'w') as f:
+                    json.dump(mongo_results, f, indent=2, cls=MongoEncoder)
+                
+                print(f"\nResults saved to {pg_path} and {mongo_path}")
+            else:
+                save_results_to_json(results, args.pg_output, args.mongo_output)
         else:
             print("No benchmark results to report")
             

@@ -2,6 +2,8 @@
 data/*
 !data/README.md
 
+results/*
+
 # Database files
 *.db
 *.sqlite

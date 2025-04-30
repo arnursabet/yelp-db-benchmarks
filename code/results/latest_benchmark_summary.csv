@@ -1,0 +1,2 @@
+Query,Description,PG Execution Time (ms),PG Rows Returned,PG Rows Examined,Mongo Execution Time (ms),Mongo Docs Returned,Mongo Docs Examined,Timestamp
+dancing_restaurants_philly,"Find restaurants with dancing, reservations and alcohol in Philadelphia",86.252,10,14598,45,10,14569,20250430_201413

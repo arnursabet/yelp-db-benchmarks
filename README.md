@@ -99,7 +99,7 @@ docker exec yelp_python python /app/code/reset_load_mongo.py --skip-validation
 
 ## Running Benchmarks
 
-The benchmarking system compares query performance between PostgreSQL and MongoDB using predefined queries.
+The benchmarking system compares query performance between PostgreSQL and MongoDB using predefined queries. The benchmark tool runs the same queries against both databases and measures execution time, rows returned, and other performance metrics.
 
 ### Basic Benchmark
 
@@ -116,67 +116,124 @@ docker exec yelp_python python /app/code/benchmark.py
 
 - Run specific queries:
   ```bash
-  docker exec yelp_python python /app/code/benchmark.py --queries business_by_city business_by_stars
+  docker exec yelp_python python /app/code/benchmark.py --queries dancing_restaurants_philly
   ```
 
-- Change the number of iterations:
+- Save results to a specific directory:
   ```bash
-  docker exec yelp_python python /app/code/benchmark.py --iterations 5
+  docker exec yelp_python python /app/code/benchmark.py --results-dir /app/my_results
+  ```
+  
+- Disable timestamps in filenames (will overwrite previous results):
+  ```bash
+  docker exec yelp_python python /app/code/benchmark.py --no-timestamp
   ```
 
-- Save results to CSV:
-  ```bash
-  docker exec yelp_python python /app/code/benchmark.py --csv results.csv
-  ```
+### Understanding Benchmark Results
 
-- Generate performance charts:
-  ```bash
-  docker exec yelp_python python /app/code/benchmark.py --charts
-  ```
+When you run a benchmark, you'll see a summary table in the console:
+
+```
+=== Benchmark Results Summary ===
++----------------------------+---------------------+---------+------------------------+-----------+--------------------+
+| Query                      | PG Execution Time   | PG Rows | Mongo Execution Time   | Mongo Rows| Mongo Docs Examined|
++============================+=====================+=========+========================+===========+====================+
+| dancing_restaurants_philly | 79.45ms             | 10      | 83ms                   | 10        | 14569              |
++----------------------------+---------------------+---------+------------------------+-----------+--------------------+
+```
+
+This shows:
+- Execution time for each database
+- Number of rows/documents returned
+- Number of documents examined by MongoDB
+
+The benchmark also saves detailed explain results to JSON files in the `code/results` directory with timestamps:
+- `postgres_explain_results_20231015_120530.json` 
+- `mongo_explain_results_20231015_120530.json`
+
+Latest results are also saved as:
+- `latest_postgres_explain_results.json`
+- `latest_mongo_explain_results.json`
+
+These files contain detailed execution plans that can be analyzed to understand query performance.
 
 ## Adding New Benchmark Queries
 
-To add new queries for benchmarking, edit the `queries/benchmark_queries.py` file.
+To add new queries for benchmarking, follow these steps:
 
-1. Add a new entry to the `QUERIES` dictionary following this format:
+### Step 1: Edit the Benchmark Queries File
+
+Edit `queries/benchmark_queries.py` and add a new entry to the `QUERIES` dictionary. Your query should include:
 
 ```python
-'query_name': {
+'your_query_name': {
     'description': 'Brief description of what the query does',
-    'pg': 'SQL query for PostgreSQL with %s placeholders for parameters',
-    'pg_params': [param1, param2, ...],  # Parameters for the PostgreSQL query
-    'mongo': lambda db: list(db.collection.find({
-        # MongoDB query criteria
-    }).limit(100))
+    
+    # PostgreSQL Query
+    'pg': """
+        SELECT column1, column2
+        FROM your_table
+        WHERE condition = %s
+        ORDER BY column1
+        LIMIT 10
+    """,
+    'pg_params': ['parameter_value'],  # Parameters for the PostgreSQL query
+    
+    # MongoDB Query (standard version)
+    'mongo': lambda db: list(db.collection.aggregate([
+        {'$match': {'field': 'value'}},
+        {'$sort': {'sort_field': -1}},
+        {'$limit': 10}
+    ])),
+    
+    # MongoDB Query (explain version)
+    'mongo_explain': lambda db: db.command(
+        'explain',
+        {
+            'aggregate': 'collection_name',
+            'pipeline': [
+                {'$match': {'field': 'value'}},
+                {'$sort': {'sort_field': -1}},
+                {'$limit': 10}
+            ],
+            'cursor': {}
+        },
+        verbosity='executionStats'
+    )
 }
 ```
 
-2. Run the benchmark with your new query:
+### Step 2: Understanding Query Structure
+
+#### PostgreSQL Queries:
+- Use `%s` placeholders for parameters
+- Include parameter values in the `pg_params` list
+- Write clear, optimized SQL with proper formatting
+
+#### MongoDB Queries:
+- The `mongo` function runs the actual query
+- The `mongo_explain` function gets the execution plan
+- Parameters should match between both functions
+- Make use of appropriate operators and index hints
+
+### Step 3: Run Your Query
+
+Test your query with:
 
 ```bash
 docker exec yelp_python python /app/code/benchmark.py --queries your_query_name
 ```
 
-### Example Query Format
+### Step 4: Analyze the Results
 
-```python
-'business_by_city': {
-    'description': 'Find businesses in a specific city',
-    'pg': 'SELECT business_id, name, stars, review_count FROM businesses WHERE city = %s LIMIT 100',
-    'pg_params': ['Berkeley'],
-    'mongo': lambda db: list(db.businesses.find(
-        {'city': 'Berkeley'}, 
-        {'_id': 1, 'name': 1, 'stars': 1, 'review_count': 1}
-    ).limit(100))
-}
-```
-
-## Troubleshooting
-
-- **Docker memory issues**: Increase memory allocation in Docker settings
-- **Slow data loading**: For MongoDB, try using `--skip-validation` option
-- **Database connection errors**: Check if containers are running with `docker-compose ps`
-- **MongoDB duplicate key errors**: The script handles duplicates, but if issues persist, check data integrity
+1. Check the summary output in the console
+2. Examine the JSON files in the `code/results` directory
+3. Look for:
+   - Execution time differences
+   - Number of rows examined vs. returned
+   - Index usage (or lack thereof)
+   - Join strategies in PostgreSQL
+   - Pipeline stages in MongoDB
 
 ## Useful Commands
 
