@@ -260,15 +260,6 @@ def collect_valid_ids(conn, cursor):
     if args.skip_validation:
         print("Skipping ID validation as requested...")
         return set(), set()
-    
-    print("Creating temporary indices for validation...")
-    try:
-        cursor.execute("CREATE INDEX IF NOT EXISTS temp_idx_business_id ON businesses(business_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS temp_idx_user_id ON users(user_id)")
-        conn.commit()
-    except psycopg2.Error as e:
-        print(f"Warning: Could not create temporary indices: {e}")
-        conn.rollback()
 
     print("Collecting valid business and user IDs...")
     cursor.execute("SELECT business_id FROM businesses")
@@ -471,33 +462,6 @@ def load_checkins(conn, cursor, valid_business_ids):
     else:
         print("Skipping checkins table...")
 
-def create_indices(conn, cursor):
-    """Create final indices for queries"""
-    print("Creating final indices...")
-    try:
-        # Drop temporary indices
-        print("Dropping temporary indices...")
-        cursor.execute("DROP INDEX IF EXISTS temp_idx_business_id")
-        cursor.execute("DROP INDEX IF EXISTS temp_idx_user_id")
-        conn.commit()
-        
-        cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_businesses_city ON businesses(city);
-        CREATE INDEX IF NOT EXISTS idx_businesses_stars ON businesses(stars);
-        CREATE INDEX IF NOT EXISTS idx_businesses_categories ON businesses USING gin(to_tsvector('english', coalesce(categories, '')));
-        CREATE INDEX IF NOT EXISTS idx_reviews_user_id ON reviews(user_id);
-        CREATE INDEX IF NOT EXISTS idx_reviews_business_id ON reviews(business_id);
-        CREATE INDEX IF NOT EXISTS idx_reviews_stars ON reviews(stars);
-        CREATE INDEX IF NOT EXISTS idx_reviews_date ON reviews(date);
-        CREATE INDEX IF NOT EXISTS idx_tips_user_id ON tips(user_id);
-        CREATE INDEX IF NOT EXISTS idx_tips_business_id ON tips(business_id);
-        CREATE INDEX IF NOT EXISTS idx_checkins_business_id ON checkins(business_id);
-        """)
-        conn.commit()
-        print("Indices created successfully")
-    except psycopg2.Error as e:
-        print(f"Error creating indices: {e}")
-        conn.rollback()
 
 def main():
     try:
@@ -516,8 +480,6 @@ def main():
         load_reviews(conn, cursor, valid_business_ids, valid_user_ids)
         load_tips(conn, cursor, valid_business_ids, valid_user_ids)
         load_checkins(conn, cursor, valid_business_ids)
-        
-        create_indices(conn, cursor)
         
         conn.close()
         print("PostgreSQL data loading complete!")

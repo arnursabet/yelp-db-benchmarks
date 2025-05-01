@@ -69,13 +69,6 @@ def load_businesses():
             total_businesses += loaded
 
         print(f"Total businesses loaded: {total_businesses}")
-
-        print("Creating business indexes...")
-        businesses_collection.create_index([("name", 1)])
-        businesses_collection.create_index([("city", 1)])
-        businesses_collection.create_index([("stars", 1)])
-        businesses_collection.create_index([("categories", "text")])
-        businesses_collection.create_index([("coordinates", "2dsphere")])
         
         return businesses_collection
     else:
@@ -116,11 +109,6 @@ def load_users():
             total_users += loaded
 
         print(f"Total users loaded: {total_users}")
-
-        print("Creating user indexes...")
-        users_collection.create_index([("review_count", 1)])
-        users_collection.create_index([("yelping_since", 1)])
-        users_collection.create_index([("average_stars", 1)])
         
         return users_collection
     else:
@@ -194,12 +182,6 @@ def load_reviews(valid_business_ids, valid_user_ids):
             total_loaded += loaded
 
         print(f"Total reviews loaded: {total_loaded}, skipped: {total_skipped}")
-
-        print("Creating review indexes...")
-        reviews_collection.create_index([("business_id", 1)])
-        reviews_collection.create_index([("user_id", 1)])
-        reviews_collection.create_index([("stars", 1)])
-        reviews_collection.create_index([("date", 1)])
         
         return reviews_collection
     else:
@@ -258,11 +240,6 @@ def load_tips(valid_business_ids, valid_user_ids):
             total_loaded += loaded
 
         print(f"Total tips loaded: {total_loaded}, skipped: {total_skipped}")
-
-        print("Creating tip indexes...")
-        tips_collection.create_index([("business_id", 1)])
-        tips_collection.create_index([("user_id", 1)])
-        tips_collection.create_index([("date", 1)])
         
         return tips_collection
     else:
@@ -310,9 +287,6 @@ def load_checkins(valid_business_ids):
 
         print(f"Total checkins loaded: {total_loaded}, skipped: {total_skipped}")
 
-        print("Creating checkin indexes...")
-        checkins_collection.create_index([("business_id", 1)])
-        
         return checkins_collection
     else:
         print("Skipping checkins collection...")
