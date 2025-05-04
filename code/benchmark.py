@@ -9,6 +9,9 @@ import bson
 from bson import json_util
 import datetime
 
+import functools
+print = functools.partial(print, flush=True)
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db_config import PG_PARAMS, get_mongo_uri, DEFAULT_DB_NAME
@@ -305,6 +308,7 @@ def main():
         results = []
         for query_name in query_names:
             if query_name in QUERIES:
+                print(f"Running benchmark for query: {query_name}")
                 result = run_benchmark(query_name, pg_conn, mongo_db)
                 if result:
                     results.append(result)

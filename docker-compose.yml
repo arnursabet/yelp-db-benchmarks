@@ -47,6 +47,7 @@ services:
     networks:
       - yelp_network
     command: tail -f /dev/null
+    cpuset: "0,1"  # Pin to CPU cores 0 and 1
 
 networks:
   yelp_network:
