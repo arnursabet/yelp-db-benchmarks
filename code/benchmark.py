@@ -91,53 +91,46 @@ def get_timestamp_str():
     now = datetime.datetime.now()
     return now.strftime("%Y%m%d_%H%M%S")
 
-def save_results_to_json(results, pg_file="postgres_explain_results.json", mongo_file="mongo_explain_results.json"):
-    """Save benchmark results to separate JSON files for PostgreSQL and MongoDB with timestamps"""
-    pg_results = {}
-    mongo_results = {}
-    
-    results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
-    if not os.path.exists(results_dir):
-        os.makedirs(results_dir)
-    
+def save_results_to_json_per_query(results):
+    base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
     timestamp = get_timestamp_str()
-    
-    pg_filename = f"{os.path.splitext(pg_file)[0]}_{timestamp}.json"
-    mongo_filename = f"{os.path.splitext(mongo_file)[0]}_{timestamp}.json"
-    
-    pg_path = os.path.join(results_dir, pg_filename)
-    mongo_path = os.path.join(results_dir, mongo_filename)
-    
+
     for result in results:
-        pg_results[result['query_name']] = {
-            'description': result['description'],
-            'explain_result': result['postgresql']
-        }
-        
-        mongo_results[result['query_name']] = {
-            'description': result['description'],
-            'explain_result': result['mongodb']
-        }
-    
-    with open(pg_path, 'w') as f:
-        json.dump(pg_results, f, indent=2)
-    print(f"\nPostgreSQL EXPLAIN results saved to {pg_path}")
-    
-    with open(mongo_path, 'w') as f:
-        json.dump(mongo_results, f, indent=2, cls=MongoEncoder)
-    print(f"MongoDB explain results saved to {mongo_path}")
-    
-    latest_pg_path = os.path.join(results_dir, "latest_" + os.path.basename(pg_file))
-    latest_mongo_path = os.path.join(results_dir, "latest_" + os.path.basename(mongo_file))
-    
-    with open(latest_pg_path, 'w') as f:
-        json.dump(pg_results, f, indent=2)
-    
-    with open(latest_mongo_path, 'w') as f:
-        json.dump(mongo_results, f, indent=2, cls=MongoEncoder)
-    print(f"Latest results also saved to {latest_pg_path} and {latest_mongo_path}")
-    
-    return results_dir, timestamp
+        query_name = result['query_name']
+        query_dir = os.path.join(base_dir, query_name)
+        os.makedirs(query_dir, exist_ok=True)
+
+        pg_filename = f"postgres_explain_{timestamp}.json"
+        mongo_filename = f"mongo_explain_{timestamp}.json"
+
+        pg_path = os.path.join(query_dir, pg_filename)
+        mongo_path = os.path.join(query_dir, mongo_filename)
+
+        with open(pg_path, 'w') as f:
+            json.dump({
+                'description': result['description'],
+                'explain_result': result['postgresql']
+            }, f, indent=2)
+
+        with open(mongo_path, 'w') as f:
+            json.dump({
+                'description': result['description'],
+                'explain_result': result['mongodb']
+            }, f, indent=2, cls=MongoEncoder)
+
+        with open(os.path.join(query_dir, "latest_postgres_explain.json"), 'w') as f:
+            json.dump({
+                'description': result['description'],
+                'explain_result': result['postgresql']
+            }, f, indent=2)
+
+        with open(os.path.join(query_dir, "latest_mongo_explain.json"), 'w') as f:
+            json.dump({
+                'description': result['description'],
+                'explain_result': result['mongodb']
+            }, f, indent=2, cls=MongoEncoder)
+
+    return base_dir, timestamp
 
 def print_results_summary(results):
     """Print a simple summary of benchmark results"""
@@ -284,6 +277,8 @@ def print_results_summary(results):
         print(f"\nResults for {query_name}:")
         print(f"  PostgreSQL: {pg_rows} rows returned, {pg_examined} rows examined")
         print(f"  MongoDB: {mongo_rows} documents returned, {mongo_examined} documents examined")
+        
+
 
 def main():
     parser = argparse.ArgumentParser(description='Benchmark PostgreSQL vs MongoDB for Yelp dataset using EXPLAIN ANALYZE')
@@ -349,7 +344,8 @@ def main():
                 
                 print(f"\nResults saved to {pg_path} and {mongo_path}")
             else:
-                save_results_to_json(results, args.pg_output, args.mongo_output)
+                save_results_to_json_per_query(results)
+
         else:
             print("No benchmark results to report")
             
