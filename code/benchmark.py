@@ -47,12 +47,22 @@ def run_postgres_explain(conn, query, params=None):
     cursor = conn.cursor()
     explain_query = f"EXPLAIN (ANALYZE, FORMAT JSON) {query}"
     
-    cursor.execute(explain_query, params or [])
-    explain_results = cursor.fetchall()
+    try:
+        cursor.execute(explain_query, params or [])
+        explain_results = cursor.fetchall()
+        
+        if explain_results and len(explain_results) > 0 and len(explain_results[0]) > 0:
+            json_result = explain_results[0][0]
+        else:
+            print("  Warning: Empty explain results, query may have failed")
+            json_result = {"error": "Empty explain results"}
+    except Exception as e:
+        print(f"  Error executing explain query: {str(e)}")
+        # Return an error object instead of raising an exception
+        json_result = {"error": str(e)}
+    finally:
+        cursor.close()
     
-    json_result = explain_results[0][0]
-    
-    cursor.close()
     return json_result
 
 def run_benchmark(query_name, pg_conn, mongo_db):
